@@ -1,32 +1,17 @@
-# Byte-compiled / optimized / DLL files
+# Python
 __pycache__/
 *.py[cod]
-*$py.class
-
-# Distribution / packaging
-.Python
-env/
-venv/
-build/
-dist/
-.eggs/
 *.egg-info/
-
-# PyInstaller
-*.manifest
-*.spec
-
-# dotenv
 .env
 
-# Data files (optional to keep out of repo)
-*.xlsx
-*.xls
-
-# OS files
-.DS_Store
-Thumbs.db
-
-# Logs and run-time files
-*.log
+# Data files
+data from db.xlsx
+excel_data_model_fixed.xlsx
 data_updated.txt
+
+# VSCode
+.vscode/
+
+# OS
+.DS_Store
+thumbs.db

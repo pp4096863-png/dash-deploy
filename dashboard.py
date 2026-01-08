@@ -297,11 +297,7 @@ def safe_years():
 
 dropdown_cols = ["Customer", "Project", "SM", "PO REF"]
 
-app = dash.Dash(__name__, suppress_callback_exceptions=True)
-app.title = "SM Insight Board"
-server = app.server
-
-app = dash.Dash(__name__, suppress_callback_exceptions=True)
+# Single Dash app instance
 app = dash.Dash(__name__, suppress_callback_exceptions=True)
 app.title = "SM Insight Board"
 server = app.server
@@ -2481,4 +2477,7 @@ if __name__ == "__main__":
     monitor_thread.start()
     print("Data monitoring started in background thread...")
 
-    app.run(debug=True, host='0.0.0.0', port=8053)"
+    # Use PORT env var when provided by the host (e.g., Render.com)
+    port = int(os.environ.get("PORT", 8053))
+    debug_env = os.environ.get("DEBUG", "True").lower() in ("1", "true", "yes")
+    app.run(debug=debug_env, host='0.0.0.0', port=port)

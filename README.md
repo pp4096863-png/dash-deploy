@@ -1,99 +1,52 @@
-# SM Insight Board (Sales Dash)
+SM Insight Board — Render deployment
 
-A Plotly Dash dashboard for sales analytics. This repository contains the Dash app (`dashboard.py`), Excel data used for development, and static assets.
+Quick start (local):
 
----
-
-## Quick start (development)
-
-Prerequisites:
-- Python 3.10+ (3.12 is used in development)
-- Git
-
-Run locally:
-
-1. Create and activate a virtual environment (recommended):
-   - Windows: `python -m venv venv && venv\Scripts\activate`
-   - macOS/Linux: `python -m venv venv && source venv/bin/activate`
+1. Create and activate a virtual environment.
 2. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-3. Start the dev server (development mode):
-   ```bash
-   python dashboard.py
-   ```
 
-This will run the Dash built-in dev server and (if the `data_from_db.xlsx` file exists) run the transformation and background monitoring when run directly.
+```bash
+pip install -r requirements.txt
+```
 
----
+3. Run locally (dev server):
 
-## Production / Deploy (Railway)
+```bash
+python dashboard.py
+# or with gunicorn (recommended for parity with Render):
+PORT=8053 gunicorn dashboard:server --bind 0.0.0.0:$PORT
+```
 
-This project is prepared for a simple GitHub→Railway deploy. Key points:
+Windows PowerShell example:
 
-- A `Procfile` has been added to run the app with Gunicorn:
+```powershell
+$env:PORT=8053; gunicorn dashboard:server --bind 0.0.0.0:$env:PORT
+```
 
-  `web: gunicorn dashboard:server --bind 0.0.0.0:$PORT --workers 2 --timeout 120`
+Deploying to Render.com
 
-- `gunicorn` has been added to `requirements.txt`.
+1. Push this repo to GitHub (or GitLab).
+2. In Render, create a new **Web Service** and connect the repo/branch.
+3. Render will detect `render.yaml` (or configure via UI):
+   - Environment: `Python`
+   - Build command: `pip install -r requirements.txt`
+   - Start command: `gunicorn dashboard:server --bind 0.0.0.0:$PORT`
+   - Health check path: `/health`
+4. Set environment variables on Render as needed (e.g., `DEBUG=false`).
 
-Railway deploy steps (summary):
-1. Push this repo to GitHub.
-2. Log into Railway and create a new project → "Deploy from GitHub" and connect your repo.
-3. Railway will detect the `Procfile` and use it to start the web service (no manual start command needed).
-4. (Optional) Set environment variables in Railway if needed.
+Data considerations
 
-Notes:
-- The app exposes the Flask server as `server = app.server` (this is the WSGI entrypoint used by Gunicorn).
-- `dashboard.py` has been made import-safe: heavy startup steps (transform + background monitor) are executed only when `python dashboard.py` is run directly (not on module import), so Gunicorn will not spawn monitor threads on worker import.
+- The app expects these files by default:
+  - `data from db.xlsx`
+  - `excel_data_model_fixed.xlsx`
+- For production, prefer storing data in cloud storage (S3, Azure Blob) and loading on startup rather than committing large binary files.
 
----
+Notes
 
-## Production considerations & tips
+- `requirements.txt` already contains `gunicorn` and primary dependencies.
+- The `/health` endpoint returns 200 OK for readiness checks.
+- The app uses the `PORT` env var for listening (Render provides it).
 
-- Do **not** keep large or proprietary Excel files in the repo for production; instead store data in S3 or a database and fetch during runtime.
-- Consider moving `data_from_db.xlsx` out of the repository and use environment variables for paths or connection strings.
-- Add environment variable support (e.g. `python-dotenv`) if you need to configure behavior (monitoring toggle, debug flags).
-- If you prefer Windows hosting, `waitress` is an alternative WSGI server. For Linux / containers, `gunicorn` is recommended.
-
----
-
-## Files added/changed by the deployment prep
-- `Procfile` — start command for Gunicorn (used by Railway)
-- `.gitignore` — ignores Excel files, `.env`, pycache and runtime files
-- `requirements.txt` — `gunicorn` added
-- `dashboard.py` — import-safe init and monitoring moved to `if __name__ == "__main__"`
-
----
-
-## Next steps (optional)
-- Add a `runtime.txt` to pin the Python version (e.g., `python-3.12`).
-- Add a `README` or short deploy checklist in GitHub with Railway screenshots/notes.
-- Create a `Dockerfile` if you prefer container-based deploys (Fly.io or Railway Docker deploy).
-
-If you want, I can also add a Dockerfile + sample `runtime.txt` and a short deploy checklist for Railway. Want me to add those now?
-
----
-
-## Fly.io deployment (optional, recommended for a free long-running host)
-
-1. Install `flyctl` (https://fly.io/docs/hands-on/install-flyctl/)
-2. Create an app: `flyctl apps create sales-dash`
-3. (Optional) Create a persistent volume named `data` and mount it to `/data`:
-   - `flyctl volumes create data --region <your-region> --size 3`
-   - Add to `fly.toml` under `[[mounts]]`:
-     ```toml
-     [[mounts]]
-     source = "data"
-     destination = "/data"
-     ```
-4. Set secrets / env vars:
-   - `flyctl secrets set DATA_FILE_PATH=/data/data_from_db.xlsx DISABLE_MONITORING=1`
-5. Deploy with Docker (Fly will build your `Dockerfile`):
-   - `flyctl deploy`
-6. Monitor logs: `flyctl logs --app sales-dash`
-
-Notes:
-- `DATA_FILE_PATH` should point to the location of your data file inside the container (e.g. `/data/data_from_db.xlsx`).
-- `DISABLE_MONITORING=1` prevents the background monitor thread from running (useful in production).
+If you want, I can:
+- Add S3 load logic and an example `ENV` usage.
+- Add a tiny CI step to build and upload an initial transformed dataset.
