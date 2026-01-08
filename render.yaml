@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: "sales-dash"
+    env: "python"
+    plan: free
+    branch: master
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "gunicorn dashboard:server --bind 0.0.0.0:$PORT --workers 2 --timeout 120"
+    envVars:
+      - key: DISABLE_MONITORING
+        value: "1"
+    healthCheckPath: "/health"
+    autoDeploy: true
