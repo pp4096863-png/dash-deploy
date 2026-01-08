@@ -14,8 +14,9 @@ import threading
 
 # Global variables for monitoring
 last_modified_time = 0
-data_file_path = "data from db.xlsx"
-transformed_file_path = "excel_data_model_fixed.xlsx"
+# Allow configuring data file paths via environment variables (useful for Fly volumes)
+data_file_path = os.environ.get("DATA_FILE_PATH", "data from db.xlsx")
+transformed_file_path = os.environ.get("TRANSFORMED_FILE_PATH", "excel_data_model_fixed.xlsx")
 monitoring_active = True
 
 def transform_data():
@@ -2449,8 +2450,12 @@ if __name__ == "__main__":
     orders, revenues, cash, merged, measure_cols = load_data()
 
     # Start monitoring thread (only when running directly)
-    monitor_thread = threading.Thread(target=monitor_data_file, daemon=True)
-    monitor_thread.start()
-    print("Data monitoring started in background thread...")
+    disable_monitor = str(os.environ.get("DISABLE_MONITORING", "0")).lower() in ("1", "true", "yes")
+    if not disable_monitor:
+        monitor_thread = threading.Thread(target=monitor_data_file, daemon=True)
+        monitor_thread.start()
+        print("Data monitoring started in background thread...")
+    else:
+        print("Data monitoring disabled via DISABLE_MONITORING env var")
 
     app.run(debug=True, host='0.0.0.0', port=8053)"

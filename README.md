@@ -73,3 +73,27 @@ Notes:
 - Create a `Dockerfile` if you prefer container-based deploys (Fly.io or Railway Docker deploy).
 
 If you want, I can also add a Dockerfile + sample `runtime.txt` and a short deploy checklist for Railway. Want me to add those now?
+
+---
+
+## Fly.io deployment (optional, recommended for a free long-running host)
+
+1. Install `flyctl` (https://fly.io/docs/hands-on/install-flyctl/)
+2. Create an app: `flyctl apps create sales-dash`
+3. (Optional) Create a persistent volume named `data` and mount it to `/data`:
+   - `flyctl volumes create data --region <your-region> --size 3`
+   - Add to `fly.toml` under `[[mounts]]`:
+     ```toml
+     [[mounts]]
+     source = "data"
+     destination = "/data"
+     ```
+4. Set secrets / env vars:
+   - `flyctl secrets set DATA_FILE_PATH=/data/data_from_db.xlsx DISABLE_MONITORING=1`
+5. Deploy with Docker (Fly will build your `Dockerfile`):
+   - `flyctl deploy`
+6. Monitor logs: `flyctl logs --app sales-dash`
+
+Notes:
+- `DATA_FILE_PATH` should point to the location of your data file inside the container (e.g. `/data/data_from_db.xlsx`).
+- `DISABLE_MONITORING=1` prevents the background monitor thread from running (useful in production).

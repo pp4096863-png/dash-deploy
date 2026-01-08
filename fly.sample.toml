@@ -1,0 +1,13 @@
+# Sample fly.toml entries to mount a persistent volume and set env
+# Use `flyctl launch` or `flyctl apps create` to generate a proper fly.toml for your app
+
+app = "sales-dash"
+
+[env]
+  # Where the app expects its data file when using a Fly volume
+  # Set with: flyctl secrets set DATA_FILE_PATH=/data/data_from_db.xlsx
+  # disable monitor in production: flyctl secrets set DISABLE_MONITORING=1
+
+[mounts]
+  source = "data"
+  destination = "/data"
