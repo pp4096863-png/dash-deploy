@@ -14,9 +14,8 @@ import threading
 
 # Global variables for monitoring
 last_modified_time = 0
-# Allow configuring data file paths via environment variables (useful for Fly volumes)
-data_file_path = os.environ.get("DATA_FILE_PATH", "data from db.xlsx")
-transformed_file_path = os.environ.get("TRANSFORMED_FILE_PATH", "excel_data_model_fixed.xlsx")
+data_file_path = "data from db.xlsx"
+transformed_file_path = "excel_data_model_fixed.xlsx"
 monitoring_active = True
 
 def transform_data():
@@ -266,6 +265,36 @@ print("Initializing dashboard (loading data only)...")
 # Note: Do not run `transform_data()` or start background monitoring at module import time to keep imports side-effect free.
 orders, revenues, cash, merged, measure_cols = load_data()
 
+# Helper functions for safe access when data is empty or missing columns (important for platform imports)
+def safe_unique(column):
+    """Return sorted unique values for column from merged, or empty list if not available."""
+    try:
+        if isinstance(merged, pd.DataFrame) and column in merged.columns:
+            return sorted(merged[column].dropna().unique())
+    except Exception:
+        pass
+    return []
+
+def safe_month_range():
+    """Return (min, max) of Month column or (today, today) when unavailable."""
+    try:
+        if isinstance(merged, pd.DataFrame) and 'Month' in merged.columns and not merged['Month'].dropna().empty:
+            return merged['Month'].min(), merged['Month'].max()
+    except Exception:
+        pass
+    today = pd.Timestamp.today()
+    return today, today
+
+def safe_years():
+    """Return sorted list of valid years (positive ints) from merged."""
+    try:
+        if isinstance(merged, pd.DataFrame) and 'Year' in merged.columns:
+            years = sorted([y for y in merged['Year'].dropna().unique() if y and y > 0])
+            return years
+    except Exception:
+        pass
+    return []
+
 dropdown_cols = ["Customer", "Project", "SM", "PO REF"]
 
 app = dash.Dash(__name__, suppress_callback_exceptions=True)
@@ -283,17 +312,10 @@ def health():
     return "OK", 200
 
 def dropdown_filter(id, column):
+    opts = safe_unique(column)
     return dcc.Dropdown(
         id=id,
-        options=[{"label": val, "value": val} for val in sorted(merged[column].dropna().unique())],
-        placeholder=f"Select {column}",
-        searchable=True,
-        clearable=True,
-        style={'width': '100%', 'fontSize': '14px', 'height': '34px', 'verticalAlign': 'middle'}
-    )
-    return dcc.Dropdown(
-        id=id,
-        options=[{"label": val, "value": val} for val in sorted(merged[column].dropna().unique())],
+        options=[{"label": val, "value": val} for val in opts],
         placeholder=f"Select {column}",
         searchable=True,
         clearable=True,
@@ -301,18 +323,17 @@ def dropdown_filter(id, column):
     )
 
 def date_range_filter(id):
+    start_date, end_date = safe_month_range()
     return dcc.DatePickerRange(
         id=id,
-        start_date=merged['Month'].min(),
-        end_date=merged['Month'].max(),
+        start_date=start_date,
+        end_date=end_date,
         display_format='YYYY-MM-DD',
         style={'width': '100%'}
     )
 
 def year_filter(id):
-    years = sorted(merged['Year'].dropna().unique())
-    # Filter out 0 values (which represent invalid dates)
-    years = [year for year in years if year > 0]
+    years = safe_years()
     return dcc.Dropdown(
         id=id,
         options=[{"label": str(int(year)), "value": int(year)} for year in years],
@@ -336,9 +357,11 @@ def period_filter(id):
     )
 
 def region_filter(id):
+    regions = safe_unique('Region')
+    region_opts = [{"label": "All Regions", "value": "All"}] + [{"label": region, "value": region} for region in regions] if regions else [{"label": "All Regions", "value": "All"}]
     return dcc.Dropdown(
         id=id,
-        options=[{"label": "All Regions", "value": "All"}] + [{"label": region, "value": region} for region in sorted(merged['Region'].dropna().unique())],
+        options=region_opts,
         value="All",
         placeholder="Select Region",
         searchable=True,
@@ -2218,6 +2241,8 @@ def populate_main_year_options(n_intervals, fast_n_intervals):
                 pass
         else:
             _o, _r, _c, m, _mc = load_data()
+        if 'Year' not in m.columns:
+            return []
         years = sorted(m['Year'].dropna().unique())
         # Filter out 0 values (which represent invalid dates)
         years = [y for y in years if y > 0]
@@ -2233,8 +2258,10 @@ def populate_main_region_sm_options(selected_year, selected_region):
     try:
         _o, _r, _c, m, _mc = load_data()
         df = m.copy()
-        if selected_year:
+        if selected_year and 'Year' in df.columns:
             df = df[df['Year'] == selected_year]
+        if selected_region and 'Region' in df.columns and selected_region != 'All':
+            df = df[df['Region'] == selected_region]
         region_opts = [{'label': r, 'value': r} for r in sorted(df['Region'].dropna().unique())]
         if selected_region:
             df = df[df['Region'] == selected_region]
@@ -2450,12 +2477,8 @@ if __name__ == "__main__":
     orders, revenues, cash, merged, measure_cols = load_data()
 
     # Start monitoring thread (only when running directly)
-    disable_monitor = str(os.environ.get("DISABLE_MONITORING", "0")).lower() in ("1", "true", "yes")
-    if not disable_monitor:
-        monitor_thread = threading.Thread(target=monitor_data_file, daemon=True)
-        monitor_thread.start()
-        print("Data monitoring started in background thread...")
-    else:
-        print("Data monitoring disabled via DISABLE_MONITORING env var")
+    monitor_thread = threading.Thread(target=monitor_data_file, daemon=True)
+    monitor_thread.start()
+    print("Data monitoring started in background thread...")
 
     app.run(debug=True, host='0.0.0.0', port=8053)"
