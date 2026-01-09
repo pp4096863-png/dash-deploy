@@ -4,5 +4,7 @@ openpyxl>=3.0.0
 xlrd>=2.0.0
 dash
 plotly
-watchdog
 gunicorn>=20.1.0
+google-auth-oauthlib
+google-auth-httplib2
+google-api-python-client

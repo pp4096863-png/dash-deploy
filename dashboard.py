@@ -11,6 +11,8 @@ import os
 import time
 import zipfile
 import threading
+from google.oauth2.service_account import Credentials
+from googleapiclient.discovery import build
 
 # Global variables for monitoring
 last_modified_time = 0
@@ -18,14 +20,68 @@ data_file_path = "data from db.xlsx"
 transformed_file_path = "excel_data_model_fixed.xlsx"
 monitoring_active = True
 
+# Google Sheets Configuration
+GOOGLE_SHEET_ID = "15G9U072EJkvkuePmWWKgIvYwfTfvGOVMdqL6AIMUwVA"
+SHEET_NAME = "Sheet1"  # Change this if your sheet has a different name
+CREDENTIALS_FILE = "google_credentials.json"
+
+def get_google_sheets_data():
+    """
+    Fetch data from Google Sheets using service account credentials.
+    Returns DataFrame with the data, or None if error occurs.
+    """
+    try:
+        # Load credentials from file or environment variable
+        if os.path.exists(CREDENTIALS_FILE):
+            creds_dict = json.load(open(CREDENTIALS_FILE))
+        else:
+            # For Render: credentials stored as environment variable
+            creds_json = os.environ.get('GOOGLE_CREDENTIALS')
+            if not creds_json:
+                print("Warning: Google credentials not found (local or env)")
+                return None
+            creds_dict = json.loads(creds_json)
+        
+        # Authenticate with Google Sheets API
+        credentials = Credentials.from_service_account_info(
+            creds_dict,
+            scopes=['https://www.googleapis.com/auth/spreadsheets.readonly']
+        )
+        service = build('sheets', 'v4', credentials=credentials)
+        
+        # Fetch data from sheet
+        sheet = service.spreadsheets()
+        result = sheet.values().get(spreadsheetId=GOOGLE_SHEET_ID, range=f"{SHEET_NAME}").execute()
+        values = result.get('values', [])
+        
+        if not values:
+            print("No data found in Google Sheet")
+            return None
+        
+        # Convert to DataFrame
+        df = pd.DataFrame(values[1:], columns=values[0])
+        print(f"✅ Loaded {len(df)} rows from Google Sheets")
+        return df
+        
+    except Exception as e:
+        print(f"❌ Error fetching from Google Sheets: {e}")
+        traceback.print_exc()
+        return None
+
 def transform_data():
     """
-    Transform data from data_from_db.xlsx to excel_data_model_fixed.xlsx
+    Transform data from Google Sheets and create dimension/fact tables.
     This function contains the logic from transform_data.py
     """
     try:
-        print("Starting data transformation...")
-        raw_data = pd.read_excel(data_file_path)
+        print("Starting data transformation from Google Sheets...")
+        
+        # Fetch data from Google Sheets
+        raw_data = get_google_sheets_data()
+        if raw_data is None or raw_data.empty:
+            print("❌ Failed to fetch data from Google Sheets")
+            return False
+        
         print(f"   Raw data shape: {raw_data.shape}")
 
         print("\n Creating Dim Tables...")
@@ -261,8 +317,16 @@ def is_data_updated(flag_file="data_updated.txt"):
     return os.path.exists(flag_file)
 
 # Initialize data (load only; heavy initialization and monitoring are performed only when running the script directly)
-print("Initializing dashboard (loading data only)...")
-# Note: Do not run `transform_data()` or start background monitoring at module import time to keep imports side-effect free.
+print("Initializing dashboard...")
+print("Attempting to fetch data from Google Sheets and transform...")
+
+# Try to transform data once at startup
+if get_google_sheets_data() is not None:
+    transform_data()
+    print("✅ Transformation completed successfully")
+else:
+    print("⚠️ Could not fetch data from Google Sheets, will try on next request")
+
 orders, revenues, cash, merged, measure_cols = load_data()
 
 # Helper functions for safe access when data is empty or missing columns (important for platform imports)
@@ -2460,22 +2524,19 @@ def export_main_chart2(n_clicks, chart_json, filter_json):
 if __name__ == "__main__":
     print("Dashboard will be available at: http://localhost:8053")
 
-    # Run initial transformation if raw data exists (development run). This is intentionally only
-    # executed when running the module directly so that WSGI servers (e.g., Gunicorn) don't
-    # trigger heavy startup side-effects on worker imports.
-    if os.path.exists(data_file_path):
-        print(f"Found {data_file_path}, running initial transformation...")
+    # Run initial transformation from Google Sheets
+    print("Fetching data from Google Sheets...")
+    if get_google_sheets_data() is not None:
         transform_data()
+        print("✅ Initial transformation completed")
     else:
-        print(f"Warning: {data_file_path} not found. Dashboard will start with empty data.")
+        print("⚠️ Could not fetch from Google Sheets initially")
 
-    # Reload data after any transformation
+    # Reload data after transformation
     orders, revenues, cash, merged, measure_cols = load_data()
 
-    # Start monitoring thread (only when running directly)
-    monitor_thread = threading.Thread(target=monitor_data_file, daemon=True)
-    monitor_thread.start()
-    print("Data monitoring started in background thread...")
+    # Note: Monitoring thread removed - data fetched from Google Sheets on demand
+    print("✅ Dashboard initialized successfully")
 
     # Use PORT env var when provided by the host (e.g., Render.com)
     port = int(os.environ.get("PORT", 8053))
