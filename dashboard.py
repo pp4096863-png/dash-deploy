@@ -96,36 +96,43 @@ def transform_data():
                 raw_data[col] = raw_data[col].astype(str).str.replace('€', '').str.replace(',', '').astype(float)
         print("   [OK] Converted currency columns to numeric")
         
-        # Convert Month to datetime (handle formats like 'January/22', '1/2022', etc)
+        # Convert Month to datetime (handle formats like '1/22/2026', 'January/22', etc)
         if 'Month' in raw_data.columns:
             try:
-                # First try standard datetime parsing
+                # Try parsing as standard date first (handles 1/22/2026, 01/22/2026, etc)
                 raw_data['Month'] = pd.to_datetime(raw_data['Month'], errors='coerce')
                 
-                # If still has NaT values, try parsing 'Month/Year' format like 'January/22'
+                # If still has NaT values, try alternative formats
                 if raw_data['Month'].isna().any():
-                    def parse_month_year(val):
+                    def parse_flexible_date(val):
                         try:
-                            if isinstance(val, str):
-                                parts = val.split('/')
-                                if len(parts) == 2:
-                                    month_str, year_str = parts
-                                    # Handle 'January' format
-                                    try:
-                                        month_num = pd.to_datetime(month_str, format='%B').month
-                                    except:
-                                        month_num = int(month_str)
-                                    
-                                    # Handle 2-digit year
-                                    year = int(year_str)
-                                    if year < 100:
-                                        year = 2000 + year
-                                    return pd.to_datetime(f"{year}-{month_num}-01")
-                            return pd.to_datetime(val, errors='coerce')
+                            if pd.isna(val):
+                                return pd.NaT
+                            
+                            val_str = str(val).strip()
+                            
+                            # Try different formats
+                            formats = [
+                                '%m/%d/%Y',      # 1/22/2026
+                                '%m/%d/%y',      # 1/22/26
+                                '%d/%m/%Y',      # 22/1/2026
+                                '%d/%m/%y',      # 22/1/26
+                                '%B/%y',         # January/22
+                                '%b/%y',         # Jan/22
+                            ]
+                            
+                            for fmt in formats:
+                                try:
+                                    return pd.to_datetime(val_str, format=fmt)
+                                except:
+                                    continue
+                            
+                            # Last resort: let pandas try
+                            return pd.to_datetime(val_str, errors='coerce')
                         except:
                             return pd.NaT
                     
-                    raw_data['Month'] = raw_data['Month'].apply(parse_month_year)
+                    raw_data['Month'] = raw_data['Month'].apply(parse_flexible_date)
                 
                 print("   [OK] Converted Month to datetime")
             except Exception as e:
