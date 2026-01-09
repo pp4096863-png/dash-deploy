@@ -99,7 +99,34 @@ def transform_data():
         # Convert Month to datetime (handle formats like 'January/22', '1/2022', etc)
         if 'Month' in raw_data.columns:
             try:
+                # First try standard datetime parsing
                 raw_data['Month'] = pd.to_datetime(raw_data['Month'], errors='coerce')
+                
+                # If still has NaT values, try parsing 'Month/Year' format like 'January/22'
+                if raw_data['Month'].isna().any():
+                    def parse_month_year(val):
+                        try:
+                            if isinstance(val, str):
+                                parts = val.split('/')
+                                if len(parts) == 2:
+                                    month_str, year_str = parts
+                                    # Handle 'January' format
+                                    try:
+                                        month_num = pd.to_datetime(month_str, format='%B').month
+                                    except:
+                                        month_num = int(month_str)
+                                    
+                                    # Handle 2-digit year
+                                    year = int(year_str)
+                                    if year < 100:
+                                        year = 2000 + year
+                                    return pd.to_datetime(f"{year}-{month_num}-01")
+                            return pd.to_datetime(val, errors='coerce')
+                        except:
+                            return pd.NaT
+                    
+                    raw_data['Month'] = raw_data['Month'].apply(parse_month_year)
+                
                 print("   [OK] Converted Month to datetime")
             except Exception as e:
                 print(f"   [WARN] Error converting Month: {e}")
@@ -124,13 +151,21 @@ def transform_data():
         print(f"   SM_Dim: {sm_dim.shape}")
 
         unique_dates = sorted(raw_data['Month'].dropna().unique())
+        
+        # Filter out any non-datetime values that might still exist
+        unique_dates = [d for d in unique_dates if isinstance(d, pd.Timestamp) or hasattr(d, 'year')]
+        
+        if not unique_dates:
+            print("[WARN] No valid dates found after conversion, using default")
+            unique_dates = [pd.Timestamp.today()]
+        
         date_dim = pd.DataFrame({
             'Date': unique_dates,
             'DateID': range(1, len(unique_dates) + 1),
-            'Year': [d.year for d in unique_dates],
-            'Month': [d.month for d in unique_dates],
-            'Quarter': [(d.month - 1) // 3 + 1 for d in unique_dates],
-            'YearMonth': [d.strftime('%Y-%m') for d in unique_dates]
+            'Year': [int(d.year) if hasattr(d, 'year') else 2026 for d in unique_dates],
+            'Month': [int(d.month) if hasattr(d, 'month') else 1 for d in unique_dates],
+            'Quarter': [((int(d.month) if hasattr(d, 'month') else 1) - 1) // 3 + 1 for d in unique_dates],
+            'YearMonth': [d.strftime('%Y-%m') if hasattr(d, 'strftime') else '2026-01' for d in unique_dates]
         })
         print(f"   Date_Dim: {date_dim.shape}")
 
