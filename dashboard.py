@@ -98,12 +98,18 @@ def transform_data():
         
         # Convert Month to datetime (handle formats like '1/22/2026', 'January/22', etc)
         if 'Month' in raw_data.columns:
+            print(f"   [DEBUG] Raw Month values (first 3): {raw_data['Month'].head(3).tolist()}")
             try:
                 # Try parsing as standard date first (handles 1/22/2026, 01/22/2026, etc)
                 raw_data['Month'] = pd.to_datetime(raw_data['Month'], errors='coerce')
                 
+                print(f"   [DEBUG] After first pd.to_datetime: {raw_data['Month'].head(3).tolist()}")
+                print(f"   [DEBUG] NaT count: {raw_data['Month'].isna().sum()}")
+                
                 # If still has NaT values, try alternative formats
                 if raw_data['Month'].isna().any():
+                    print(f"   [DEBUG] Found NaT values, trying flexible parsing...")
+                    
                     def parse_flexible_date(val):
                         try:
                             if pd.isna(val):
@@ -133,10 +139,12 @@ def transform_data():
                             return pd.NaT
                     
                     raw_data['Month'] = raw_data['Month'].apply(parse_flexible_date)
+                    print(f"   [DEBUG] After flexible parsing: {raw_data['Month'].head(3).tolist()}")
                 
                 print("   [OK] Converted Month to datetime")
             except Exception as e:
-                print(f"   [WARN] Error converting Month: {e}")
+                print(f"   [ERROR] Error converting Month: {e}")
+                traceback.print_exc()
 
         print("\n Creating Dim Tables...")
         customer_dim = pd.DataFrame({
@@ -158,13 +166,18 @@ def transform_data():
         print(f"   SM_Dim: {sm_dim.shape}")
 
         unique_dates = sorted(raw_data['Month'].dropna().unique())
+        print(f"   [DEBUG] Unique dates before filtering: {unique_dates[:3] if len(unique_dates) > 0 else 'EMPTY'}")
+        print(f"   [DEBUG] Types: {[type(d).__name__ for d in unique_dates[:3]] if len(unique_dates) > 0 else 'EMPTY'}")
         
         # Filter out any non-datetime values that might still exist
-        unique_dates = [d for d in unique_dates if isinstance(d, pd.Timestamp) or hasattr(d, 'year')]
+        unique_dates = [d for d in unique_dates if isinstance(d, (pd.Timestamp, pd.datetime64)) or hasattr(d, 'year')]
+        print(f"   [DEBUG] Unique dates after filtering: {len(unique_dates)} dates")
         
         if not unique_dates:
             print("[WARN] No valid dates found after conversion, using default")
             unique_dates = [pd.Timestamp.today()]
+        else:
+            print(f"   [OK] Found {len(unique_dates)} valid dates")
         
         date_dim = pd.DataFrame({
             'Date': unique_dates,
