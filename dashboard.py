@@ -60,11 +60,11 @@ def get_google_sheets_data():
         
         # Convert to DataFrame
         df = pd.DataFrame(values[1:], columns=values[0])
-        print(f"✅ Loaded {len(df)} rows from Google Sheets")
+        print(f"[OK] Loaded {len(df)} rows from Google Sheets")
         return df
         
     except Exception as e:
-        print(f"❌ Error fetching from Google Sheets: {e}")
+        print(f"[ERROR] Error fetching from Google Sheets: {e}")
         traceback.print_exc()
         return None
 
@@ -83,6 +83,26 @@ def transform_data():
             return False
         
         print(f"   Raw data shape: {raw_data.shape}")
+        
+        # Clean the data: remove 'New SM' column if exists
+        if 'New SM' in raw_data.columns:
+            raw_data = raw_data.drop('New SM', axis=1)
+            print("   Removed 'New SM' column")
+        
+        # Convert currency columns to numeric (remove € symbol and commas)
+        currency_cols = ['Order Amount', 'Revenue Amount', 'Cash Amount', 'Pending Amount', 'Backlog Amount']
+        for col in currency_cols:
+            if col in raw_data.columns:
+                raw_data[col] = raw_data[col].astype(str).str.replace('€', '').str.replace(',', '').astype(float)
+        print("   [OK] Converted currency columns to numeric")
+        
+        # Convert Month to datetime (handle formats like 'January/22', '1/2022', etc)
+        if 'Month' in raw_data.columns:
+            try:
+                raw_data['Month'] = pd.to_datetime(raw_data['Month'], errors='coerce')
+                print("   [OK] Converted Month to datetime")
+            except Exception as e:
+                print(f"   [WARN] Error converting Month: {e}")
 
         print("\n Creating Dim Tables...")
         customer_dim = pd.DataFrame({
