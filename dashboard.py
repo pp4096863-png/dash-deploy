@@ -11,6 +11,7 @@ import os
 import time
 import zipfile
 import threading
+import hashlib
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 
@@ -24,6 +25,8 @@ cached_revenues = pd.DataFrame()
 cached_cash = pd.DataFrame()
 cached_merged = pd.DataFrame()
 cached_measure_cols = {}
+data_lock = threading.Lock()
+last_sheet_hash = None
 
 # Google Sheets Configuration
 GOOGLE_SHEET_ID = "15G9U072EJkvkuePmWWKgIvYwfTfvGOVMdqL6AIMUwVA"
@@ -269,26 +272,53 @@ def transform_data():
         })
         print(f"   Cash_Fact: {cash_fact.shape}")
 
-        # Cache the transformed data in memory (no file needed!)
-        global cached_orders, cached_revenues, cached_cash, cached_merged, cached_measure_cols
-        cached_orders = orders_fact
-        cached_revenues = revenues_fact
-        cached_cash = cash_fact
-        
         # Create merged dataset
         common_cols = [col for col in ["Customer", "Project", "Month", "SM", "PO REF", "Region"] if col in orders_fact.columns and col in revenues_fact.columns and col in cash_fact.columns]
         merged = orders_fact.merge(revenues_fact, on=common_cols, how="outer", suffixes=("_order", "_revenue"))
         merged = merged.merge(cash_fact, on=common_cols, how="outer", suffixes=("", "_cash"))
-        cached_merged = merged
-        
-        # Set up measure columns
-        cached_measure_cols = {
-            "Order Amount": "Order Amount",
-            "Revenue Amount": "Revenue Amount",
-            "Cash Amount": "Cash Amount",
-            "Backlog Amount": "Backlog Amount",
-            "Pending Amount": "Pending Amount"
-        }
+
+        # Cache the transformed data in memory (no file needed!)
+        global cached_orders, cached_revenues, cached_cash, cached_merged, cached_measure_cols, data_lock
+        # Use a lock to make assignments thread-safe when monitor thread runs
+        with data_lock:
+            cached_orders = orders_fact
+            cached_revenues = revenues_fact
+            cached_cash = cash_fact
+            cached_merged = merged
+
+        # Ensure Year column exists on merged (derived from Month when possible)
+        try:
+            if 'Month' in cached_merged.columns:
+                # use dt.year where possible
+                try:
+                    cached_merged['Year'] = cached_merged['Month'].dt.year
+                except Exception:
+                    cached_merged['Year'] = cached_merged['Month'].apply(lambda d: int(getattr(d, 'year', None)) if pd.notna(d) else None)
+        except Exception:
+            pass
+
+        # Defensive mapping: find actual column names in merged dataframe for expected measures
+        def find_measure_col(df, base_name):
+            # exact match
+            if base_name in df.columns:
+                return base_name
+            # look for columns that contain the base_name
+            matches = [c for c in df.columns if base_name in c]
+            if matches:
+                return matches[0]
+            # case-insensitive contains
+            base_lower = base_name.lower()
+            for c in df.columns:
+                if base_lower in c.lower():
+                    return c
+            return None
+
+        cached_measure_cols = {}
+        for base in ["Order Amount", "Revenue Amount", "Cash Amount", "Backlog Amount", "Pending Amount"]:
+            found = find_measure_col(cached_merged, base)
+            cached_measure_cols[base] = found
+
+        print(f"   [DEBUG] Mapped measure columns: {cached_measure_cols}")
 
         print(f"\n [OK] Transformation completed! Data cached in memory")
         print(f"     Orders: {orders_fact.shape}")
@@ -307,29 +337,58 @@ def monitor_data_file():
     Monitor data_from_db.xlsx for changes using polling
     This function runs in a separate thread
     """
+    # Monitoring of a local file is optional and not used in the Render deployment.
+    # Keep a safe no-op implementation to avoid NameError or syntax issues.
     global last_modified_time, monitoring_active
-    
-    while monitoring_active:
-        try:
-            if os.path.exists(data_file_path):
-                current_mtime = os.path.getmtime(data_file_path)
-                
-                    print(f"\nData file modified at {datetime.fromtimestamp(current_mtime)}")
-                    last_modified_time = current_mtime
-                    
-                    # Run transformation
-                    if transform_data():
-                        print("Data transformation completed successfully!")
-                    else:
-                        print("Data transformation failed!")
+    print("monitor_data_file: file monitoring is disabled in this environment")
+    return
+
+
+def compute_df_hash(df: pd.DataFrame) -> str:
+    """Compute a stable hash for a dataframe's contents for change detection."""
+    try:
+        j = df.to_json(date_format='iso', orient='split')
+        return hashlib.md5(j.encode('utf-8')).hexdigest()
+    except Exception:
+        return ''
+
+
+def start_sheet_monitor(poll_interval:int=30):
+    """Start a background thread that polls Google Sheets for changes and re-runs transform_data()."""
+    global monitoring_active, last_sheet_hash
+
+    if not monitoring_active:
+        monitoring_active = True
+
+    def _monitor():
+        nonlocal poll_interval
+        print(f"sheet_monitor: starting with interval={poll_interval}s")
+        while monitoring_active:
+            try:
+                df = get_google_sheets_data()
+                if df is None:
+                    print("sheet_monitor: unable to fetch sheet (None)")
                 else:
-                    time.sleep(2)  # Poll every 2 seconds
-            else:
-                print(f"Warning: {data_file_path} not found. Waiting for file...")
-                time.sleep(5)  # Wait longer if file doesn't exist
-        except Exception as e:
-            print(f"Error in monitor_data_file: {e}")
-            time.sleep(5)
+                    new_hash = compute_df_hash(df)
+                    if last_sheet_hash != new_hash:
+                        print("sheet_monitor: change detected in Google Sheet, running transform...")
+                        # Run transform using the fresh df by temporarily writing it to a global
+                        # We prefer transform_data to re-fetch, but to avoid double fetching, call transform_data()
+                        # and let it fetch again; after success update last_sheet_hash.
+                        ok = transform_data()
+                        if ok:
+                            last_sheet_hash = new_hash
+                            print("sheet_monitor: transform succeeded, cache updated")
+                        else:
+                            print("sheet_monitor: transform failed")
+                    else:
+                        print("sheet_monitor: no change detected")
+            except Exception as e:
+                print(f"sheet_monitor: error during poll: {e}")
+            time.sleep(int(os.environ.get('SHEET_POLL_INTERVAL', poll_interval)))
+
+    t = threading.Thread(target=_monitor, daemon=True)
+    t.start()
 
 def load_data():
     """
