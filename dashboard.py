@@ -168,7 +168,7 @@ def transform_data():
         print(f"   [DEBUG] Types: {[type(d).__name__ for d in unique_dates[:3]] if len(unique_dates) > 0 else 'EMPTY'}")
         
         # Filter out any non-datetime values that might still exist
-        unique_dates = [d for d in unique_dates if isinstance(d, (pd.Timestamp, pd.datetime64)) or hasattr(d, 'year')]
+        unique_dates = [d for d in unique_dates if isinstance(d, pd.Timestamp) or hasattr(d, 'year')]
         print(f"   [DEBUG] Unique dates after filtering: {len(unique_dates)} dates")
         
         if not unique_dates:
