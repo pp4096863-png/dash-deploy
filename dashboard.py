@@ -14,11 +14,16 @@ import threading
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 
-# Global variables for monitoring
+# Global variables for data caching (in-memory, no files needed)
 last_modified_time = 0
-data_file_path = "data from db.xlsx"
-transformed_file_path = "excel_data_model_fixed.xlsx"
 monitoring_active = True
+
+# Cached transformed data (in-memory)
+cached_orders = pd.DataFrame()
+cached_revenues = pd.DataFrame()
+cached_cash = pd.DataFrame()
+cached_merged = pd.DataFrame()
+cached_measure_cols = {}
 
 # Google Sheets Configuration
 GOOGLE_SHEET_ID = "15G9U072EJkvkuePmWWKgIvYwfTfvGOVMdqL6AIMUwVA"
@@ -264,25 +269,32 @@ def transform_data():
         })
         print(f"   Cash_Fact: {cash_fact.shape}")
 
-        output_filename = transformed_file_path
-
-        with pd.ExcelWriter(output_filename, engine='openpyxl') as writer:
-            customer_dim.to_excel(writer, sheet_name='Customer_Dim', index=False)
-            project_dim.to_excel(writer, sheet_name='Project_Dim', index=False)
-            sm_dim.to_excel(writer, sheet_name='SM_Dim', index=False)
-            date_dim.to_excel(writer, sheet_name='Date_Dim', index=False)
-            po_ref_dim.to_excel(writer, sheet_name='PO REF_Dim', index=False)
-            region_dim.to_excel(writer, sheet_name='Region_Dim', index=False)
-            
-            orders_fact.to_excel(writer, sheet_name='Orders_Fact', index=False)
-            revenues_fact.to_excel(writer, sheet_name='Revenues_Fact', index=False)
-            cash_fact.to_excel(writer, sheet_name='Cash_Fact', index=False)
-
-        print(f"\n Transformation completed successfully and file saved as {output_filename}!")
+        # Cache the transformed data in memory (no file needed!)
+        global cached_orders, cached_revenues, cached_cash, cached_merged, cached_measure_cols
+        cached_orders = orders_fact
+        cached_revenues = revenues_fact
+        cached_cash = cash_fact
         
-        # Create a flag file to indicate data was updated
-        with open('data_updated.txt', 'w') as f:
-            f.write(str(datetime.now()))
+        # Create merged dataset
+        common_cols = [col for col in ["Customer", "Project", "Month", "SM", "PO REF", "Region"] if col in orders_fact.columns and col in revenues_fact.columns and col in cash_fact.columns]
+        merged = orders_fact.merge(revenues_fact, on=common_cols, how="outer", suffixes=("_order", "_revenue"))
+        merged = merged.merge(cash_fact, on=common_cols, how="outer", suffixes=("", "_cash"))
+        cached_merged = merged
+        
+        # Set up measure columns
+        cached_measure_cols = {
+            "Order Amount": "Order Amount",
+            "Revenue Amount": "Revenue Amount",
+            "Cash Amount": "Cash Amount",
+            "Backlog Amount": "Backlog Amount",
+            "Pending Amount": "Pending Amount"
+        }
+
+        print(f"\n [OK] Transformation completed! Data cached in memory")
+        print(f"     Orders: {orders_fact.shape}")
+        print(f"     Revenues: {revenues_fact.shape}")
+        print(f"     Cash: {cash_fact.shape}")
+        print(f"     Merged: {merged.shape}")
             
         return True
     except Exception as e:
@@ -322,63 +334,18 @@ def monitor_data_file():
 
 def load_data():
     """
-    Load data from excel_data_model_fixed.xlsx with retry/backoff to avoid reading while file is being written.
+    Load cached transformed data from memory (no file reading needed).
     """
-    max_retries = 6
-    delay = 0.2
-    for attempt in range(1, max_retries + 1):
-        try:
-            orders = pd.read_excel(transformed_file_path, sheet_name="Orders_Fact")
-            revenues = pd.read_excel(transformed_file_path, sheet_name="Revenues_Fact")
-            cash = pd.read_excel(transformed_file_path, sheet_name="Cash_Fact")
-
-            orders['Month'] = pd.to_datetime(orders['Month'], errors='coerce')
-            revenues['Month'] = pd.to_datetime(revenues['Month'], errors='coerce')
-            cash['Month'] = pd.to_datetime(cash['Month'], errors='coerce')
-            orders['Year'] = orders['Month'].dt.year.fillna(0).astype(int)
-            revenues['Year'] = revenues['Month'].dt.year.fillna(0).astype(int)
-            cash['Year'] = cash['Month'].dt.year.fillna(0).astype(int)
-
-            common_cols = [col for col in ["Customer", "Project", "Month", "SM", "PO REF", "Region"] if col in orders.columns and col in revenues.columns and col in cash.columns]
-            merged = orders.merge(revenues, on=common_cols, how="outer", suffixes=("_order", "_revenue"))
-            merged = merged.merge(cash, on=common_cols, how="outer", suffixes=("", "_cash"))
-            merged['Year'] = merged['Month'].dt.year.fillna(0).astype(int)
-
-            measure_cols = {
-                "Order Amount": "Order Amount",
-                "Revenue Amount": "Revenue Amount",
-                "Cash Amount": "Cash Amount",
-                "Backlog Amount": "Backlog Amount",
-                "Pending Amount": "Pending Amount"     
-            }
-            if "Revenue Amount_revenue" in merged.columns:
-                measure_cols["Revenue Amount"] = "Revenue Amount_revenue"
-            elif "Revenue Amount" in merged.columns:
-                measure_cols["Revenue Amount"] = "Revenue Amount"
-            elif "Revenue Amount_order" in merged.columns:
-                measure_cols["Revenue Amount"] = "Revenue Amount_order"
-
-            if "Cash Amount_cash" in merged.columns:
-                measure_cols["Cash Amount"] = "Cash Amount_cash"
-            elif "Cash Amount" in merged.columns:
-                measure_cols["Cash Amount"] = "Cash Amount"
-            elif "Cash Amount_order" in merged.columns:
-                measure_cols["Cash Amount"] = "Cash Amount_order"
-
-            return orders, revenues, cash, merged, measure_cols
-
-        except (zipfile.BadZipFile, OSError, ValueError) as e:
-            print(f"Attempt {attempt}/{max_retries} - error reading transformed file: {e}")
-            if attempt == max_retries:
-                print("Max retries reached. Returning empty dataframes.")
-                empty_df = pd.DataFrame()
-                return empty_df, empty_df, empty_df, empty_df, {}
-            time.sleep(delay)
-            delay *= 2
-        except Exception as e:
-            print(f"Error in load_data: {e}")
-            empty_df = pd.DataFrame()
-            return empty_df, empty_df, empty_df, empty_df, {}
+    global cached_orders, cached_revenues, cached_cash, cached_merged, cached_measure_cols
+    
+    # If data is cached, return it
+    if not cached_merged.empty:
+        print("[OK] Returning cached data")
+        return cached_orders, cached_revenues, cached_cash, cached_merged, cached_measure_cols
+    else:
+        print("[WARN] No cached data available, returning empty dataframes")
+        empty_df = pd.DataFrame()
+        return empty_df, empty_df, empty_df, empty_df, {}
 
 def is_data_updated(flag_file="data_updated.txt"):
     """Check if data was updated"""
