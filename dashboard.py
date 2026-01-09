@@ -96,51 +96,44 @@ def transform_data():
                 raw_data[col] = raw_data[col].astype(str).str.replace('€', '').str.replace(',', '').astype(float)
         print("   [OK] Converted currency columns to numeric")
         
-        # Convert Month to datetime (handle formats like '1/22/2026', 'January/22', etc)
+        # Convert Month to datetime (handle formats like 'January/22', '1/22/2026', etc)
         if 'Month' in raw_data.columns:
             print(f"   [DEBUG] Raw Month values (first 3): {raw_data['Month'].head(3).tolist()}")
             try:
-                # Try parsing as standard date first (handles 1/22/2026, 01/22/2026, etc)
-                raw_data['Month'] = pd.to_datetime(raw_data['Month'], errors='coerce')
-                
-                print(f"   [DEBUG] After first pd.to_datetime: {raw_data['Month'].head(3).tolist()}")
-                print(f"   [DEBUG] NaT count: {raw_data['Month'].isna().sum()}")
-                
-                # If still has NaT values, try alternative formats
-                if raw_data['Month'].isna().any():
-                    print(f"   [DEBUG] Found NaT values, trying flexible parsing...")
-                    
-                    def parse_flexible_date(val):
-                        try:
-                            if pd.isna(val):
-                                return pd.NaT
-                            
-                            val_str = str(val).strip()
-                            
-                            # Try different formats
-                            formats = [
-                                '%m/%d/%Y',      # 1/22/2026
-                                '%m/%d/%y',      # 1/22/26
-                                '%d/%m/%Y',      # 22/1/2026
-                                '%d/%m/%y',      # 22/1/26
-                                '%B/%y',         # January/22
-                                '%b/%y',         # Jan/22
-                            ]
-                            
-                            for fmt in formats:
-                                try:
-                                    return pd.to_datetime(val_str, format=fmt)
-                                except:
-                                    continue
-                            
-                            # Last resort: let pandas try
-                            return pd.to_datetime(val_str, errors='coerce')
-                        except:
+                def parse_flexible_date(val):
+                    try:
+                        if pd.isna(val):
                             return pd.NaT
-                    
-                    raw_data['Month'] = raw_data['Month'].apply(parse_flexible_date)
-                    print(f"   [DEBUG] After flexible parsing: {raw_data['Month'].head(3).tolist()}")
+                        
+                        val_str = str(val).strip()
+                        
+                        # Try different formats - ORDER MATTERS!
+                        formats = [
+                            '%B/%y',         # January/22 - TRY THIS FIRST
+                            '%b/%y',         # Jan/22
+                            '%m/%d/%Y',      # 1/22/2026
+                            '%m/%d/%y',      # 1/22/26
+                            '%d/%m/%Y',      # 22/1/2026
+                            '%d/%m/%y',      # 22/1/26
+                        ]
+                        
+                        for fmt in formats:
+                            try:
+                                result = pd.to_datetime(val_str, format=fmt)
+                                return result
+                            except:
+                                continue
+                        
+                        # Last resort: let pandas try without format
+                        return pd.to_datetime(val_str, errors='coerce')
+                    except:
+                        return pd.NaT
                 
+                # Apply parsing directly to raw values (don't use pd.to_datetime first!)
+                raw_data['Month'] = raw_data['Month'].apply(parse_flexible_date)
+                
+                print(f"   [DEBUG] After parsing: {raw_data['Month'].head(3).tolist()}")
+                print(f"   [DEBUG] NaT count: {raw_data['Month'].isna().sum()}")
                 print("   [OK] Converted Month to datetime")
             except Exception as e:
                 print(f"   [ERROR] Error converting Month: {e}")
