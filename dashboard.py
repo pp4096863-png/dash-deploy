@@ -314,7 +314,6 @@ def monitor_data_file():
             if os.path.exists(data_file_path):
                 current_mtime = os.path.getmtime(data_file_path)
                 
-                if current_mtime > last_modified_time:
                     print(f"\nData file modified at {datetime.fromtimestamp(current_mtime)}")
                     last_modified_time = current_mtime
                     
