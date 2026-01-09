@@ -26,7 +26,7 @@ cached_cash = pd.DataFrame()
 cached_merged = pd.DataFrame()
 cached_measure_cols = {}
 data_lock = threading.Lock()
-last_sheet_hash = None
+last_sheet_hash = ''  # Will be set after first transform
 
 # Google Sheets Configuration
 GOOGLE_SHEET_ID = "15G9U072EJkvkuePmWWKgIvYwfTfvGOVMdqL6AIMUwVA"
@@ -353,7 +353,7 @@ def compute_df_hash(df: pd.DataFrame) -> str:
         return ''
 
 
-def start_sheet_monitor(poll_interval:int=30):
+def start_sheet_monitor(poll_interval: int = 30):
     """Start a background thread that polls Google Sheets for changes and re-runs transform_data()."""
     global monitoring_active, last_sheet_hash
 
@@ -361,34 +361,41 @@ def start_sheet_monitor(poll_interval:int=30):
         monitoring_active = True
 
     def _monitor():
-        nonlocal poll_interval
         print(f"sheet_monitor: starting with interval={poll_interval}s")
         while monitoring_active:
             try:
                 df = get_google_sheets_data()
                 if df is None:
                     print("sheet_monitor: unable to fetch sheet (None)")
-                else:
-                    new_hash = compute_df_hash(df)
-                    if last_sheet_hash != new_hash:
-                        print("sheet_monitor: change detected in Google Sheet, running transform...")
-                        # Run transform using the fresh df by temporarily writing it to a global
-                        # We prefer transform_data to re-fetch, but to avoid double fetching, call transform_data()
-                        # and let it fetch again; after success update last_sheet_hash.
-                        ok = transform_data()
-                        if ok:
+                    time.sleep(int(os.environ.get('SHEET_POLL_INTERVAL', poll_interval)))
+                    continue
+
+                new_hash = compute_df_hash(df)
+                if last_sheet_hash != new_hash:
+                    print("sheet_monitor: change detected in Google Sheet, running transform...")
+                    print(f"sheet_monitor: old hash={last_sheet_hash[:8] if last_sheet_hash else 'NONE'}..., new hash={new_hash[:8]}...")
+                    # Run transform using the fresh df by temporarily writing it to a global
+                    # We prefer transform_data to re-fetch, but to avoid double fetching, call transform_data()
+                    # and let it fetch again; after success update last_sheet_hash.
+                    ok = transform_data()
+                    if ok:
+                        with data_lock:
                             last_sheet_hash = new_hash
-                            print("sheet_monitor: transform succeeded, cache updated")
-                        else:
-                            print("sheet_monitor: transform failed")
+                        print("sheet_monitor: transform succeeded, cache updated")
+                        print(f"sheet_monitor: updated last_sheet_hash={last_sheet_hash[:8]}...")
                     else:
-                        print("sheet_monitor: no change detected")
+                        print("sheet_monitor: transform failed")
+                else:
+                    print(f"sheet_monitor: no change detected (hash={new_hash[:8]}...)")
             except Exception as e:
                 print(f"sheet_monitor: error during poll: {e}")
+                traceback.print_exc()
             time.sleep(int(os.environ.get('SHEET_POLL_INTERVAL', poll_interval)))
 
     t = threading.Thread(target=_monitor, daemon=True)
     t.start()
+    print(f"✅ Sheet monitor started (daemon thread)")
+    return t
 
 def load_data():
     """
@@ -416,7 +423,18 @@ print("Attempting to fetch data from Google Sheets and transform...")
 # Try to transform data once at startup
 if get_google_sheets_data() is not None:
     transform_data()
+    # Set the initial hash so monitor can detect changes
+    try:
+        initial_df = get_google_sheets_data()
+        if initial_df is not None:
+            last_sheet_hash = compute_df_hash(initial_df)
+            print(f"[OK] Initial sheet hash set: {last_sheet_hash[:8]}...")
+    except Exception as e:
+        print(f"[WARN] Could not compute initial hash: {e}")
     print("✅ Transformation completed successfully")
+    # Start the background monitor thread to detect changes
+    print("\n[STARTING] Background sheet monitor...")
+    start_sheet_monitor(poll_interval=15)  # Poll every 15 seconds (adjust as needed)
 else:
     print("⚠️ Could not fetch data from Google Sheets, will try on next request")
 
